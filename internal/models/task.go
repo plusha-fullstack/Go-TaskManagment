@@ -20,6 +20,8 @@ type Task struct {
 	Description string
 	Status      string
 	Priority    string
-	Author      User
-	Assignee    User
+	AuthorID    uint // Foreign key
+	Author      User `gorm:"foreignKey:AuthorID"`
+	AssigneeID  uint // Foreign key
+	Assignee    User `gorm:"foreignKey:AssigneeID"`
 }
