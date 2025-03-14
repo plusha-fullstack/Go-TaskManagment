@@ -1,47 +1,57 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"task-tracker/db"
-	"task-tracker/routes"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"gitlab.ozon.dev/pupkingeorgij/homework/internal/db"
+	"gitlab.ozon.dev/pupkingeorgij/homework/internal/repository/postgresql"
+	"gitlab.ozon.dev/pupkingeorgij/homework/internal/server"
+	"gitlab.ozon.dev/pupkingeorgij/homework/internal/storage"
 )
 
 func main() {
-	// r := gin.Default()
-	// r.GET("/ping", func(c *gin.Context) {
-	// 	c.JSON(http.StatusOK, gin.H{
-	// 		"message": "pong",
-	// 	})
-	// })
-	// r.Run() // listen and serve on 0.0.0.0:8080 (for windows "localhost:8080")
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
-	database, err := db.InitDB()
+	dbPool, err := db.NewDb(ctx)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		fmt.Println("Database init error:", err)
+		return
 	}
-	r := routes.SetupRouter(database)
 
-	// Start Server
-	port := "8080"
-	fmt.Println("Server is running on port " + port)
-	r.Run(":" + port)
-	// // Migrate the schema
+	db.InitAdmin(dbPool)
 
-	// email := "irina_vtn@yandex.ru"
-	// // Create
-	// db.Create(&models.User{Username: "Irina", Email: &email, Password: "123456", Role: "admin"})
+	var orderRepo storage.OrderRepository = postgresql.NewOrderRepo(dbPool)
+	var returnRepo storage.ReturnRepository = postgresql.NewReturnRepo(dbPool)
+	var historyRepo storage.HistoryRepository = postgresql.NewHistoryRepo(dbPool)
+	var userRepo storage.UserRepository = postgresql.NewUserRepo(dbPool)
 
-	// // Read
-	// var User models.User
-	// db.First(&User, 1) // find product with integer primary key
+	stg := storage.NewStorage(ctx, dbPool, orderRepo, returnRepo, historyRepo, userRepo)
 
-	// db.Model(&User).Update("Username", "George")
-	// // Update - update multiple fields
-	// db.Model(&User).Updates(&models.User{Username: "Wakik", Email: &email, Password: "654321", Role: "user"}) // non-zero fields
-	// db.Model(&User).Updates(map[string]interface{}{"Username": "Wakik", "Email": &email, "Password": "6ya gay", "Role": "guest"})
+	srv := server.New(stg, userRepo)
 
-	// Delete - delete product
-	//db.Delete(&User, 1)
-	// all this finally work!!
+	go func() {
+		if err := srv.Run("9000"); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	log.Println("Server started on port 9000")
+
+	<-ctx.Done()
+	log.Println("Shutting down server...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("Server shutdown failed: %v", err)
+	}
+
+	log.Println("Server gracefully stopped")
 }
